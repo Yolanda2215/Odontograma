@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Weenat API Integration
  * Description: Muestra datos de dispositivos y mediciones de la API Weenat mediante shortcodes.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Ayuntamiento Farlete
  * Text Domain: weenat-api
  */
@@ -29,6 +29,146 @@ if ( ! defined( 'WEENAT_API_BASE' ) ) {
 if ( ! defined( 'WEENAT_DEFAULT_DEVICE_ID' ) ) {
 	define( 'WEENAT_DEFAULT_DEVICE_ID', 47032 );
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Etiquetas, iconos y unidades de cada métrica
+// ─────────────────────────────────────────────────────────────────
+
+function weenat_metric_info() {
+	return [
+		'T'   => [ 'label' => 'Temperatura',         'icon' => '🌡️', 'unit' => '°C'  ],
+		'U'   => [ 'label' => 'Humedad',              'icon' => '💧', 'unit' => '%'   ],
+		'RR'  => [ 'label' => 'Precipitación',        'icon' => '🌧️', 'unit' => 'mm'  ],
+		'FF'  => [ 'label' => 'Vel. viento',          'icon' => '💨', 'unit' => 'm/s' ],
+		'FXY' => [ 'label' => 'Racha máx.',           'icon' => '🌬️', 'unit' => 'm/s' ],
+		'DD'  => [ 'label' => 'Dir. viento',          'icon' => '🧭', 'unit' => '°'   ],
+		'DXY' => [ 'label' => 'Dir. racha máx.',      'icon' => '🧭', 'unit' => '°'   ],
+		'THI' => [ 'label' => 'Índice calor-humedad', 'icon' => '🌡️', 'unit' => ''    ],
+	];
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Estilos inline (se inyectan una sola vez en el <head>)
+// ─────────────────────────────────────────────────────────────────
+
+function weenat_inline_styles() {
+	?>
+	<style id="weenat-api-styles">
+		/* ── Tarjetas: [weenat_current] ────────────────────────── */
+		.weenat-current {
+			margin: 1.5em 0;
+			font-family: inherit;
+		}
+		.weenat-current__title {
+			font-size: 1.3em;
+			font-weight: 700;
+			margin-bottom: 0.25em;
+			color: #1a1a2e;
+		}
+		.weenat-current__updated {
+			font-size: 0.85em;
+			color: #666;
+			margin-bottom: 1em;
+		}
+		.weenat-current__grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+			gap: 1em;
+		}
+		.weenat-card {
+			background: #ffffff;
+			border: 1px solid #e0e0e0;
+			border-radius: 12px;
+			padding: 1.2em 1em;
+			text-align: center;
+			box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+			transition: transform 0.15s ease, box-shadow 0.15s ease;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 0.4em;
+		}
+		.weenat-card:hover {
+			transform: translateY(-3px);
+			box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+		}
+		.weenat-card__icon {
+			font-size: 2em;
+			line-height: 1;
+		}
+		.weenat-card__label {
+			font-size: 0.78em;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: #888;
+		}
+		.weenat-card__value {
+			font-size: 1.8em;
+			font-weight: 700;
+			color: #1a1a2e;
+			line-height: 1.1;
+		}
+		.weenat-card__unit {
+			font-size: 0.5em;
+			font-weight: 400;
+			color: #aaa;
+			margin-left: 0.2em;
+			vertical-align: super;
+		}
+
+		/* ── Tabla: [weenat_devices] y [weenat_measurements] ───── */
+		.weenat-devices,
+		.weenat-measurements {
+			overflow-x: auto;
+			margin: 1.5em 0;
+		}
+		.weenat-table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 0.9em;
+		}
+		.weenat-table th,
+		.weenat-table td {
+			padding: 0.5em 0.75em;
+			border: 1px solid #ddd;
+			text-align: left;
+			vertical-align: top;
+		}
+		.weenat-table thead th {
+			background: #f5f5f5;
+			font-weight: 600;
+		}
+		.weenat-table tbody tr:nth-child(even) {
+			background: #fafafa;
+		}
+
+		/* ── Estados ────────────────────────────────────────────── */
+		.weenat-error {
+			color: #c0392b;
+			font-weight: bold;
+		}
+		.weenat-empty,
+		.weenat-period {
+			font-size: 0.85em;
+			color: #666;
+			margin-bottom: 0.5em;
+		}
+		.weenat-empty { font-style: italic; }
+
+		/* ── Responsive ─────────────────────────────────────────── */
+		@media (max-width: 480px) {
+			.weenat-current__grid {
+				grid-template-columns: repeat(2, 1fr);
+			}
+			.weenat-card__value {
+				font-size: 1.4em;
+			}
+		}
+	</style>
+	<?php
+}
+add_action( 'wp_head', 'weenat_inline_styles' );
 
 // ─────────────────────────────────────────────────────────────────
 // Función de llamada HTTP centralizada
@@ -99,8 +239,119 @@ function weenat_api_get( $endpoint, $query = [] ) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Shortcode: [weenat_current]
+//
+// Muestra la ÚLTIMA medición como tarjetas visuales.
+//
+// Parámetros:
+//   device_id : ID del dispositivo. Por defecto 47032 (Anemómetro).
+//               Usa 47025 para la estación meteorológica (RR, T, U).
+//   title     : Título opcional sobre las tarjetas.
+//
+// Ejemplos:
+//   [weenat_current]
+//   [weenat_current device_id="47025" title="Estación meteorológica"]
+// ─────────────────────────────────────────────────────────────────
+
+function weenat_shortcode_current( $atts ) {
+	$atts = shortcode_atts(
+		[
+			'device_id' => WEENAT_DEFAULT_DEVICE_ID,
+			'title'     => '',
+		],
+		$atts,
+		'weenat_current'
+	);
+
+	$device_id = absint( $atts['device_id'] );
+
+	if ( ! $device_id ) {
+		return '<p class="weenat-error">' . esc_html__( 'Indica el atributo device_id en el shortcode.', 'weenat-api' ) . '</p>';
+	}
+
+	// Pedimos las últimas 3 horas con resolución raw para tener el dato más reciente.
+	$end_ts   = current_time( 'timestamp', true );
+	$start_ts = $end_ts - ( 3 * HOUR_IN_SECONDS );
+
+	$query = [
+		'timespan' => 'raw',
+		'start'    => gmdate( 'Y-m-d\TH:i:s\Z', $start_ts ),
+		'end'      => gmdate( 'Y-m-d\TH:i:s\Z', $end_ts ),
+	];
+
+	$data = weenat_api_get( '/data/devices/' . $device_id . '/', $query );
+
+	if ( is_wp_error( $data ) ) {
+		return '<p class="weenat-error">' . esc_html( $data->get_error_message() ) . '</p>';
+	}
+
+	$measurements = [];
+	if ( isset( $data['results'] ) && is_array( $data['results'] ) ) {
+		$measurements = $data['results'];
+	} elseif ( is_array( $data ) && ! empty( $data ) && isset( $data[0] ) ) {
+		$measurements = $data;
+	}
+
+	if ( empty( $measurements ) ) {
+		return '<p class="weenat-empty">' . esc_html__( 'Sin datos disponibles.', 'weenat-api' ) . '</p>';
+	}
+
+	// Toma la última fila (dato más reciente).
+	$latest  = end( $measurements );
+	$metrics = weenat_metric_info();
+	$datetime = isset( $latest['datetime'] ) ? $latest['datetime'] : '';
+
+	// Convierte datetime UTC a hora local de Madrid.
+	$fecha_local = '';
+	if ( $datetime ) {
+		try {
+			$dt = new DateTime( $datetime, new DateTimeZone( 'UTC' ) );
+			$dt->setTimezone( new DateTimeZone( 'Europe/Madrid' ) );
+			$fecha_local = $dt->format( 'd/m/Y H:i' );
+		} catch ( Exception $e ) {
+			$fecha_local = $datetime;
+		}
+	}
+
+	ob_start();
+	?>
+	<div class="weenat-current">
+		<?php if ( ! empty( $atts['title'] ) ) : ?>
+			<h3 class="weenat-current__title"><?php echo esc_html( $atts['title'] ); ?></h3>
+		<?php endif; ?>
+		<?php if ( $fecha_local ) : ?>
+			<p class="weenat-current__updated">
+				<?php esc_html_e( 'Última actualización:', 'weenat-api' ); ?>
+				<strong><?php echo esc_html( $fecha_local ); ?></strong>
+			</p>
+		<?php endif; ?>
+		<div class="weenat-current__grid">
+			<?php foreach ( $metrics as $key => $info ) : ?>
+				<?php if ( ! array_key_exists( $key, $latest ) ) continue; ?>
+				<?php
+				$value = $latest[ $key ];
+				if ( is_numeric( $value ) ) {
+					$value = number_format( (float) $value, 1, ',', '.' );
+				}
+				?>
+				<div class="weenat-card">
+					<span class="weenat-card__icon"><?php echo $info['icon']; ?></span>
+					<span class="weenat-card__label"><?php echo esc_html( $info['label'] ); ?></span>
+					<span class="weenat-card__value">
+						<?php echo esc_html( $value ); ?>
+						<span class="weenat-card__unit"><?php echo esc_html( $info['unit'] ); ?></span>
+					</span>
+				</div>
+			<?php endforeach; ?>
+		</div>
+	</div>
+	<?php
+	return ob_get_clean();
+}
+add_shortcode( 'weenat_current', 'weenat_shortcode_current' );
+
+// ─────────────────────────────────────────────────────────────────
 // Shortcode: [weenat_devices]
-// Muestra la lista de todas las estaciones.
 // ─────────────────────────────────────────────────────────────────
 
 function weenat_shortcode_devices( $atts ) {
@@ -161,10 +412,9 @@ add_shortcode( 'weenat_devices', 'weenat_shortcode_devices' );
 // Shortcode: [weenat_measurements]
 //
 // Parámetros:
-//   device_id  : ID del dispositivo. Por defecto 47032 (Anemómetro).
-//                Usa 47025 para la estación meteorológica (RR, T, U).
-//   timespan   : Resolución de datos: raw, hour (defecto), day.
-//   days       : Días hacia atrás a consultar (defecto 1, máx 35 con hour).
+//   device_id : ID del dispositivo. Por defecto 47032 (Anemómetro).
+//   timespan  : Resolución: raw, hour (defecto), day.
+//   days      : Días hacia atrás (defecto 1, máx 35 con hour).
 //
 // Ejemplos:
 //   [weenat_measurements]
@@ -189,7 +439,7 @@ function weenat_shortcode_measurements( $atts ) {
 	}
 
 	$days     = max( 1, absint( $atts['days'] ) );
-	$end_ts   = current_time( 'timestamp', true ); // UTC
+	$end_ts   = current_time( 'timestamp', true );
 	$start_ts = $end_ts - ( $days * DAY_IN_SECONDS );
 
 	$start = gmdate( 'Y-m-d\TH:i:s\Z', $start_ts );
@@ -201,14 +451,12 @@ function weenat_shortcode_measurements( $atts ) {
 		'end'      => $end,
 	];
 
-	$endpoint = '/data/devices/' . $device_id . '/';
-	$data     = weenat_api_get( $endpoint, $query );
+	$data = weenat_api_get( '/data/devices/' . $device_id . '/', $query );
 
 	if ( is_wp_error( $data ) ) {
 		return '<p class="weenat-error">' . esc_html( $data->get_error_message() ) . '</p>';
 	}
 
-	// La API devuelve directamente un array de objetos: [{"datetime":...,"DD":...}, ...]
 	$measurements = [];
 	if ( isset( $data['results'] ) && is_array( $data['results'] ) ) {
 		$measurements = $data['results'];
@@ -258,17 +506,3 @@ function weenat_shortcode_measurements( $atts ) {
 	return ob_get_clean();
 }
 add_shortcode( 'weenat_measurements', 'weenat_shortcode_measurements' );
-
-// ─────────────────────────────────────────────────────────────────
-// Estilos básicos
-// ─────────────────────────────────────────────────────────────────
-
-function weenat_enqueue_styles() {
-	wp_enqueue_style(
-		'weenat-api',
-		plugin_dir_url( __FILE__ ) . 'weenat-api.css',
-		[],
-		'1.1.0'
-	);
-}
-add_action( 'wp_enqueue_scripts', 'weenat_enqueue_styles' );
