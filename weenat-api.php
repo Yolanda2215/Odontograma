@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Weenat API Integration
  * Description: Muestra datos de dispositivos y mediciones de la API Weenat mediante shortcodes.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Ayuntamiento Farlete
  * Text Domain: weenat-api
  */
@@ -24,8 +24,10 @@ if ( ! defined( 'WEENAT_API_BASE' ) ) {
 }
 
 // Estaciones disponibles:
-//   47032 — Anemómetro        (DD, DXY, FF, FXY)
-//   47025 — Estación meteo    (RR, T, U)
+//   47032 — Anemómetro              (DD, DXY, FF, FXY)  → timespan raw/hour/day
+//   47025 — Estación meteo          (RR, T, U)           → sin datos reales
+//   75900 — Estación virtual (SMV)  (RR, T, U, THI)      → mínimo timespan=hour
+//   75901 — Estación virtual (SMV)  (RR, T, U, THI)      → mínimo timespan=hour
 if ( ! defined( 'WEENAT_DEFAULT_DEVICE_ID' ) ) {
 	define( 'WEENAT_DEFAULT_DEVICE_ID', 47032 );
 }
@@ -239,18 +241,44 @@ function weenat_api_get( $endpoint, $query = [] ) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Detecta si un dispositivo es estación virtual (SMV)
+//
+// Las estaciones SMV no admiten timespan=raw, mínimo es hour.
+// Se cachea el resultado en un transient para no llamar a la API
+// en cada carga de página.
+// ─────────────────────────────────────────────────────────────────
+
+function weenat_device_is_virtual( $device_id ) {
+	$cache_key = 'weenat_device_model_' . $device_id;
+	$model     = get_transient( $cache_key );
+
+	if ( false === $model ) {
+		$device = weenat_api_get( '/devices/' . $device_id . '/' );
+		$model  = ( ! is_wp_error( $device ) && isset( $device['model'] ) )
+			? $device['model']
+			: '';
+		// Cachea durante 24 horas (el modelo no cambia).
+		set_transient( $cache_key, $model, DAY_IN_SECONDS );
+	}
+
+	return strtoupper( $model ) === 'SMV';
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Shortcode: [weenat_current]
 //
 // Muestra la ÚLTIMA medición como tarjetas visuales.
+// Detecta automáticamente si el dispositivo es SMV y usa
+// timespan=hour en ese caso (raw no está disponible para SMV).
 //
 // Parámetros:
 //   device_id : ID del dispositivo. Por defecto 47032 (Anemómetro).
-//               Usa 47025 para la estación meteorológica (RR, T, U).
+//               Usa 75900 o 75901 para estaciones virtuales (T, U, RR).
 //   title     : Título opcional sobre las tarjetas.
 //
 // Ejemplos:
 //   [weenat_current]
-//   [weenat_current device_id="47025" title="Estación meteorológica"]
+//   [weenat_current device_id="75900" title="Estación meteorológica"]
 // ─────────────────────────────────────────────────────────────────
 
 function weenat_shortcode_current( $atts ) {
@@ -269,12 +297,19 @@ function weenat_shortcode_current( $atts ) {
 		return '<p class="weenat-error">' . esc_html__( 'Indica el atributo device_id en el shortcode.', 'weenat-api' ) . '</p>';
 	}
 
-	// Pedimos las últimas 3 horas con resolución raw para tener el dato más reciente.
+	// Las estaciones virtuales (SMV) solo admiten timespan=hour como mínimo.
+	// Las demás usan raw para obtener el dato más reciente posible.
+	$is_virtual = weenat_device_is_virtual( $device_id );
+	$timespan   = $is_virtual ? 'hour' : 'raw';
+
 	$end_ts   = current_time( 'timestamp', true );
-	$start_ts = $end_ts - ( 3 * HOUR_IN_SECONDS );
+	// Para raw pedimos las últimas 3 horas; para hour las últimas 25 (garantiza al menos 1 registro).
+	$start_ts = $is_virtual
+		? $end_ts - ( 25 * HOUR_IN_SECONDS )
+		: $end_ts - ( 3 * HOUR_IN_SECONDS );
 
 	$query = [
-		'timespan' => 'raw',
+		'timespan' => $timespan,
 		'start'    => gmdate( 'Y-m-d\TH:i:s\Z', $start_ts ),
 		'end'      => gmdate( 'Y-m-d\TH:i:s\Z', $end_ts ),
 	];
@@ -297,8 +332,8 @@ function weenat_shortcode_current( $atts ) {
 	}
 
 	// Toma la última fila (dato más reciente).
-	$latest  = end( $measurements );
-	$metrics = weenat_metric_info();
+	$latest   = end( $measurements );
+	$metrics  = weenat_metric_info();
 	$datetime = isset( $latest['datetime'] ) ? $latest['datetime'] : '';
 
 	// Convierte datetime UTC a hora local de Madrid.
@@ -332,6 +367,8 @@ function weenat_shortcode_current( $atts ) {
 				$value = $latest[ $key ];
 				if ( is_numeric( $value ) ) {
 					$value = number_format( (float) $value, 1, ',', '.' );
+				} elseif ( is_null( $value ) ) {
+					$value = '—';
 				}
 				?>
 				<div class="weenat-card">
@@ -339,7 +376,9 @@ function weenat_shortcode_current( $atts ) {
 					<span class="weenat-card__label"><?php echo esc_html( $info['label'] ); ?></span>
 					<span class="weenat-card__value">
 						<?php echo esc_html( $value ); ?>
-						<span class="weenat-card__unit"><?php echo esc_html( $info['unit'] ); ?></span>
+						<?php if ( $value !== '—' ) : ?>
+							<span class="weenat-card__unit"><?php echo esc_html( $info['unit'] ); ?></span>
+						<?php endif; ?>
 					</span>
 				</div>
 			<?php endforeach; ?>
@@ -418,7 +457,7 @@ add_shortcode( 'weenat_devices', 'weenat_shortcode_devices' );
 //
 // Ejemplos:
 //   [weenat_measurements]
-//   [weenat_measurements device_id="47025" timespan="hour" days="7"]
+//   [weenat_measurements device_id="75900" timespan="hour" days="7"]
 // ─────────────────────────────────────────────────────────────────
 
 function weenat_shortcode_measurements( $atts ) {
