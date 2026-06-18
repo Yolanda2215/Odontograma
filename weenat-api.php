@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Weenat API Integration
  * Description: Muestra datos de dispositivos y mediciones de la API Weenat mediante shortcodes.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Ayuntamiento Farlete
  * Text Domain: weenat-api
  */
@@ -13,7 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─────────────────────────────────────────────────────────────────
 // Configuración
-// ─────────────────────────────────────────────────────────────��───
+// ─────────────────────────────────────────────────────────────────
 
 if ( ! defined( 'WEENAT_API_KEY' ) ) {
 	define( 'WEENAT_API_KEY', 'CvK5lHbwTQ5jcP6tkVpr' );
@@ -23,9 +23,11 @@ if ( ! defined( 'WEENAT_API_BASE' ) ) {
 	define( 'WEENAT_API_BASE', 'https://api-prod.weenat.com/v3' );
 }
 
-// ID de las estaciones.
+// Estaciones disponibles:
+//   47032 — Anemómetro        (DD, DXY, FF, FXY)
+//   47025 — Estación meteo    (RR, T, U)
 if ( ! defined( 'WEENAT_DEFAULT_DEVICE_ID' ) ) {
-	define( 'WEENAT_DEFAULT_DEVICE_ID', 47032 ); // Anemómetro
+	define( 'WEENAT_DEFAULT_DEVICE_ID', 47032 );
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ if ( ! defined( 'WEENAT_DEFAULT_DEVICE_ID' ) ) {
 /**
  * Realiza una petición GET autenticada a la API Weenat.
  *
- * @param string $endpoint  Ruta relativa, p. ej. '/devices/' o '/devices/47032/measurements/'.
+ * @param string $endpoint  Ruta relativa, p. ej. '/devices/' o '/data/devices/47032/'.
  * @param array  $query     Parámetros de consulta opcionales (clave => valor).
  * @return array|WP_Error   Array descodificado o WP_Error en caso de fallo.
  */
@@ -156,22 +158,25 @@ function weenat_shortcode_devices( $atts ) {
 add_shortcode( 'weenat_devices', 'weenat_shortcode_devices' );
 
 // ─────────────────────────────────────────────────────────────────
-// Shortcode: [weenat_measurements device_id="47032" metrics="T,U,RR" days="1"]
+// Shortcode: [weenat_measurements]
 //
-// Estaciones disponibles:
-//   47032 — Anemómetro (DD, DXY, FF, FXY)
-//   47025 — Estación meteorológica (RR, T, U)
+// Parámetros:
+//   device_id  : ID del dispositivo. Por defecto 47032 (Anemómetro).
+//                Usa 47025 para la estación meteorológica (RR, T, U).
+//   timespan   : Resolución de datos: raw, hour (defecto), day.
+//   days       : Días hacia atrás a consultar (defecto 1, máx 35 con hour).
 //
-// Uso simple: [weenat_measurements]
+// Ejemplos:
+//   [weenat_measurements]
+//   [weenat_measurements device_id="47025" timespan="hour" days="7"]
 // ─────────────────────────────────────────────────────────────────
 
 function weenat_shortcode_measurements( $atts ) {
 	$atts = shortcode_atts(
 		[
 			'device_id' => WEENAT_DEFAULT_DEVICE_ID,
-			'metrics'   => '',
+			'timespan'  => 'hour',
 			'days'      => 1,
-			'step'      => 60,
 		],
 		$atts,
 		'weenat_measurements'
@@ -184,40 +189,31 @@ function weenat_shortcode_measurements( $atts ) {
 	}
 
 	$days     = max( 1, absint( $atts['days'] ) );
-	$step     = max( 1, absint( $atts['step'] ) );
-	$end_ts   = current_time( 'timestamp', true );
+	$end_ts   = current_time( 'timestamp', true ); // UTC
 	$start_ts = $end_ts - ( $days * DAY_IN_SECONDS );
 
-	$start_date = gmdate( 'Y-m-d\TH:i:s\Z', $start_ts );
-	$end_date   = gmdate( 'Y-m-d\TH:i:s\Z', $end_ts );
+	$start = gmdate( 'Y-m-d\TH:i:s\Z', $start_ts );
+	$end   = gmdate( 'Y-m-d\TH:i:s\Z', $end_ts );
 
 	$query = [
-		'start_date' => $start_date,
-		'end_date'   => $end_date,
-		'step'       => $step,
+		'timespan' => sanitize_text_field( $atts['timespan'] ),
+		'start'    => $start,
+		'end'      => $end,
 	];
 
-	if ( ! empty( $atts['metrics'] ) ) {
-		$query['metrics'] = $atts['metrics'];
-	}
-
-	$endpoint = '/devices/' . $device_id . '/measurements/';
+	$endpoint = '/data/devices/' . $device_id . '/';
 	$data     = weenat_api_get( $endpoint, $query );
 
 	if ( is_wp_error( $data ) ) {
 		return '<p class="weenat-error">' . esc_html( $data->get_error_message() ) . '</p>';
 	}
 
+	// La API devuelve directamente un array de objetos: [{"datetime":...,"DD":...}, ...]
 	$measurements = [];
 	if ( isset( $data['results'] ) && is_array( $data['results'] ) ) {
 		$measurements = $data['results'];
-	} elseif ( isset( $data['data'] ) && is_array( $data['data'] ) ) {
-		$measurements = $data['data'];
-	} elseif ( is_array( $data ) && ! empty( $data ) ) {
-		$first = reset( $data );
-		if ( is_array( $first ) ) {
-			$measurements = $data;
-		}
+	} elseif ( is_array( $data ) && ! empty( $data ) && isset( $data[0] ) ) {
+		$measurements = $data;
 	}
 
 	if ( empty( $measurements ) ) {
@@ -234,8 +230,8 @@ function weenat_shortcode_measurements( $atts ) {
 			<?php
 			printf(
 				esc_html__( 'Período: %1$s — %2$s (UTC)', 'weenat-api' ),
-				esc_html( $start_date ),
-				esc_html( $end_date )
+				esc_html( $start ),
+				esc_html( $end )
 			);
 			?>
 		</p>
@@ -272,7 +268,7 @@ function weenat_enqueue_styles() {
 		'weenat-api',
 		plugin_dir_url( __FILE__ ) . 'weenat-api.css',
 		[],
-		'1.0.0'
+		'1.1.0'
 	);
 }
 add_action( 'wp_enqueue_scripts', 'weenat_enqueue_styles' );
