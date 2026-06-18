@@ -11,25 +11,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 // Configuración
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Define WEENAT_API_KEY en wp-config.php:
-//   define( 'WEENAT_API_KEY', 'tu-clave-aqui' );
-// O bien edita directamente la constante de abajo (no recomendado).
+// ─────────────────────────────────────────────────────────────────
 
 if ( ! defined( 'WEENAT_API_KEY' ) ) {
-	define( 'WEENAT_API_KEY', '' );
+	define( 'WEENAT_API_KEY', 'CvK5lHbwTQ5jcP6tkVpr' );
 }
 
 if ( ! defined( 'WEENAT_API_BASE' ) ) {
 	define( 'WEENAT_API_BASE', 'https://api.weenat.com/v3' );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ID de la estación por defecto.
+if ( ! defined( 'WEENAT_DEFAULT_DEVICE_ID' ) ) {
+	define( 'WEENAT_DEFAULT_DEVICE_ID', 47032 );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Función de llamada HTTP centralizada
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 
 /**
  * Realiza una petición GET autenticada a la API Weenat.
@@ -96,9 +97,9 @@ function weenat_api_get( $endpoint, $query = [] ) {
 	return $data;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 // Shortcode: [weenat_devices]
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 
 /**
  * Muestra la lista de dispositivos Weenat registrados.
@@ -159,26 +160,27 @@ function weenat_shortcode_devices( $atts ) {
 }
 add_shortcode( 'weenat_devices', 'weenat_shortcode_devices' );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shortcode: [weenat_measurements device_id="47025" metrics="T,U,RR" days="1"]
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// Shortcode: [weenat_measurements device_id="47032" metrics="T,U,RR" days="1"]
+// ─────────────────────────────────────────────────────────────────
 
 /**
  * Muestra las mediciones de un dispositivo Weenat.
  *
  * Parámetros del shortcode:
- *  - device_id  (requerido) : ID numérico del dispositivo.
+ *  - device_id  (opcional)  : ID numérico del dispositivo. Por defecto WEENAT_DEFAULT_DEVICE_ID (47032).
  *  - metrics    (opcional)  : métricas separadas por coma, p. ej. "T,U,RR".
  *                             Si se omite se usan todas las disponibles.
  *  - days       (opcional)  : número de días hacia atrás a consultar (por defecto 1).
  *  - step       (opcional)  : resolución temporal en minutos (por defecto 60).
  *
- * Uso: [weenat_measurements device_id="47025" metrics="T,U" days="2"]
+ * Uso: [weenat_measurements]
+ * Uso: [weenat_measurements metrics="T,U" days="2"]
  */
 function weenat_shortcode_measurements( $atts ) {
 	$atts = shortcode_atts(
 		[
-			'device_id' => '',
+			'device_id' => WEENAT_DEFAULT_DEVICE_ID,
 			'metrics'   => '',
 			'days'      => 1,
 			'step'      => 60,
@@ -194,9 +196,9 @@ function weenat_shortcode_measurements( $atts ) {
 	}
 
 	// Calcula el rango de fechas en UTC.
-	$days    = max( 1, absint( $atts['days'] ) );
-	$step    = max( 1, absint( $atts['step'] ) );
-	$end_ts  = current_time( 'timestamp', true ); // UTC
+	$days     = max( 1, absint( $atts['days'] ) );
+	$step     = max( 1, absint( $atts['step'] ) );
+	$end_ts   = current_time( 'timestamp', true ); // UTC
 	$start_ts = $end_ts - ( $days * DAY_IN_SECONDS );
 
 	// La API Weenat espera fechas ISO 8601 (p. ej. 2024-06-01T00:00:00Z).
@@ -281,9 +283,9 @@ function weenat_shortcode_measurements( $atts ) {
 }
 add_shortcode( 'weenat_measurements', 'weenat_shortcode_measurements' );
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 // Estilos básicos (encolados solo cuando hay shortcodes en la página)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 
 function weenat_enqueue_styles() {
 	wp_enqueue_style(
