@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Weenat API Integration
  * Description: Muestra datos de dispositivos y mediciones de la API Weenat mediante shortcodes.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Ayuntamiento Farlete
  * Text Domain: weenat-api
  */
@@ -244,21 +244,30 @@ function weenat_api_get( $endpoint, $query = [] ) {
 // Detecta si un dispositivo es estación virtual (SMV)
 //
 // Las estaciones SMV no admiten timespan=raw, mínimo es hour.
-// Se cachea el resultado en un transient para no llamar a la API
-// en cada carga de página.
+// Se cachea el resultado en un transient 24 horas.
+// Si la caché guardó un modelo vacío (fallo previo), se invalida
+// automáticamente y se vuelve a consultar la API.
 // ─────────────────────────────────────────────────────────────────
 
 function weenat_device_is_virtual( $device_id ) {
 	$cache_key = 'weenat_device_model_' . $device_id;
 	$model     = get_transient( $cache_key );
 
-	if ( false === $model ) {
+	// Si la caché está vacía o guardó un valor vacío, volvemos a preguntar.
+	if ( false === $model || '' === $model ) {
+		// Borra cualquier caché vacía anterior.
+		delete_transient( $cache_key );
+
 		$device = weenat_api_get( '/devices/' . $device_id . '/' );
-		$model  = ( ! is_wp_error( $device ) && isset( $device['model'] ) )
-			? $device['model']
-			: '';
-		// Cachea durante 24 horas (el modelo no cambia).
-		set_transient( $cache_key, $model, DAY_IN_SECONDS );
+
+		if ( ! is_wp_error( $device ) && ! empty( $device['model'] ) ) {
+			$model = $device['model'];
+			// Solo cacheamos si obtuvimos un modelo real.
+			set_transient( $cache_key, $model, DAY_IN_SECONDS );
+		} else {
+			// No pudimos obtener el modelo: no cacheamos, reintentará en la próxima carga.
+			$model = '';
+		}
 	}
 
 	return strtoupper( $model ) === 'SMV';
@@ -302,7 +311,7 @@ function weenat_shortcode_current( $atts ) {
 	$is_virtual = weenat_device_is_virtual( $device_id );
 	$timespan   = $is_virtual ? 'hour' : 'raw';
 
-	$end_ts   = current_time( 'timestamp', true );
+	$end_ts = current_time( 'timestamp', true );
 	// Para raw pedimos las últimas 3 horas; para hour las últimas 25 (garantiza al menos 1 registro).
 	$start_ts = $is_virtual
 		? $end_ts - ( 25 * HOUR_IN_SECONDS )
